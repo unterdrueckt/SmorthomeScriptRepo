@@ -1,0 +1,12 @@
+{
+  "name": "fritzbox",
+  "version": "1.0.0",
+  "type": "addon",
+  "icon": "img:https://upload.wikimedia.org/wikipedia/de/6/68/Fritz%21_Logo.svg",
+  "description": "Fritzbox smart home addon.",
+  "config": {
+    "url": "http://192.168.178.1",
+    "username": "",
+    "password": ""
+  }
+}
