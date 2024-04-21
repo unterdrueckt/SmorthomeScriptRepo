@@ -144,11 +144,52 @@ function handleInitMessage(device: DeviceDocument, deviceValues: any): boolean {
     initSearching(device);
     return true;
   } else {
+    for (const featureKey in deviceValues?.feature) {
+      featureValue.set(featureKey, deviceValues?.feature?.[featureKey]);
+    }
     return false;
   }
 }
 
 function sendDeviceSettings() {
+  for (const [key, value] of featureValue) {
+    const feature = getFeatureByTypeOrNameOrId(device, key);
+    if (feature && feature?.category == "action" && feature?.types) {
+      const feature_numbers = extractNumberFromArray(feature?.types);
+      if (feature_numbers && feature_numbers[0]) {
+        const pwm_number = feature_numbers[0];
+        let pwm_value;
+        let fade_time = 0; // Default fade time is 0 ms
+        if (
+          typeof value === "boolean" ||
+          value === "true" ||
+          value === "false"
+        ) {
+          pwm_value = value === true || value === "true" ? 255 : 0; // Convert boolean or string 'true' or 'false' to 0 or 255
+        } else {
+          pwm_value = parseInt(value); // Convert string to integer
+
+          pwm_value = 2.5 * pwm_value;
+          if (isNaN(pwm_value)) {
+            console.error(
+              `Invalid value received for feature ${key}: ${value}`
+            );
+            continue; // Skip this feature if the value is not a valid number
+          }
+          fade_time = getPWMFadeTime(device, pwm_number);
+        }
+        parentPort?.postMessage({
+          type: "publishMessage",
+          topic: `/device/${device._id}/pwm/${pwm_number}`,
+          message: JSON.stringify({
+            value: pwm_value,
+            fade: fade_time,
+          }),
+        });
+      }
+    }
+  }
+
   // request device infos
   parentPort?.postMessage({
     type: "publishMessage",
@@ -177,6 +218,7 @@ function handleSearchingMqttMessage(message, device: DeviceDocument) {
   } else if (message.topic.startsWith(`/device/${device._id}/registered`)) {
     handleRegisteredDeviceMessage(message, device);
   }
+  offlineTimeoutStart();
 }
 
 /**
@@ -395,6 +437,7 @@ function handleMqttMessage(message: any, device: DeviceDocument) {
         return;
       }
     }
+    offlineTimeoutStart();
     if (infoMessage && typeof infoMessage === "object") {
       parentPort?.postMessage({
         type: "editDevice",
@@ -416,6 +459,7 @@ function handleMqttMessage(message: any, device: DeviceDocument) {
       }
     }
   } else if (message.topic.startsWith(`/device/${device._id}/status`)) {
+    offlineTimeoutStart();
     if (deviceStatus != message.message && message.message == "online") {
       sendDeviceSettings();
     }
@@ -562,7 +606,7 @@ function offlineTimeoutStart(clear = true) {
           feature: {},
         },
       });
-      offlineTimeoutStart(false);
+      offlineTimeoutStart();
     }, setOffineTimeoutTime);
   }
 }
@@ -571,36 +615,36 @@ function offlineTimeoutStart(clear = true) {
 // ----------           < MAIN PROCESS >           ----------
 // ----------------------------------------------------------
 
-/**
- * Main process event handler for a device driver.
- *
- * This code listens for incoming messages and responds based on the message type:
- * - If the initial message type is 'init', it checks if the device is in searching mode or not.
- *   - If searching, it sets up a listener for MQTT messages using 'handleSearchingMqttMessage'.
- *   - If not searching, it sets the device status to 'online' and listens for both MQTT and Redis messages.
- *
- * @param message - The incoming message from the parent process.
- */
-parentPort.on("message", (message) => {
-  if (message.type === "init") {
-    device = message.device;
-    searching = handleInitMessage(device, message.values);
-  } else {
-    // if driver is in searching mode and has not found the new device
-    if (searching) {
-      if (message.type === "mqtt") {
-        handleSearchingMqttMessage(message, device);
-      }
-    } else {
-      if (message.type === "mqtt") {
-        handleMqttMessage(message, device);
+if (!isMainThread) {
+  /**
+   * Main process event handler for a device driver.
+   *
+   * This code listens for incoming messages and responds based on the message type:
+   * - If the initial message type is 'init', it checks if the device is in searching mode or not.
+   *   - If searching, it sets up a listener for MQTT messages using 'handleSearchingMqttMessage'.
+   *   - If not searching, it sets the device status to 'online' and listens for both MQTT and Redis messages.
+   *
+   * @param message - The incoming message from the parent process.
+   */
+  parentPort.on("message", async (message) => {
+    switch (message?.type) {
+      case "init":
+        device = message.device;
+        searching = handleInitMessage(device, message.values);
         offlineTimeoutStart();
-      }
-
-      if (message.type === "redis") {
+        break;
+      case "mqtt":
+        if (searching) {
+          handleSearchingMqttMessage(message, device);
+        } else {
+          handleMqttMessage(message, device);
+        }
+        break;
+      case "redis":
         handleRedisMessage(message, device);
-      }
-      offlineTimeoutStart(false);
+        break;
+      default:
+        break;
     }
-  }
-});
+  });
+}
