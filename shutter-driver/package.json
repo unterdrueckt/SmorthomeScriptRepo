@@ -1,6 +1,6 @@
 {
   "name": "Shutter Controller",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "driver",
   "icon": "mdi-blinds-horizontal",
   "description": "A driver for the esp-shutter. Plug and play - Create an empty device using this driver and start the device."

@@ -87,7 +87,7 @@ let device_features: Record<
     id: "",
     value: 0,
     command: "setTiltPercentageTarget",
-    initCommand: "setShutterPositionPercentage",
+    initCommand: "setTiltPercentage",
   },
 };
 
@@ -145,7 +145,7 @@ function initSearching(device: DeviceDocument) {
       type: "editDevice",
       update: {
         conf: {
-          topics: ["/newdevice/#", `/device/${device._id.toString()}/#`],
+          topics: ["/newdevice/#", `/device/${device._id}/#`],
           searching: true,
         },
       },
@@ -187,7 +187,7 @@ function handleInitMessage(device: DeviceDocument, deviceValues: any): boolean {
   if (
     !device.conf ||
     !Object.keys(device.conf).length ||
-    (device.conf && device.conf.searching != false)
+    (device.conf && device.conf.searching !== false)
   ) {
     initSearching(device);
     return true;
@@ -286,9 +286,10 @@ function handleSearchingMqttMessage(message, device: DeviceDocument) {
   ) {
     handleRegisteredDeviceMessage(message, device);
   }
+  offlineTimeoutStart();
 }
 
-/**
+/**s
  * Handles incoming MQTT messages for new devices.
  *
  * This function processes the MQTT message, expecting it to contain JSON data.
@@ -392,6 +393,7 @@ function handleRegisteredDeviceMessage(message, device: DeviceDocument) {
  * @param device - The DeviceDocument representing the device.
  */
 function handleMqttMessage(message: any, device: DeviceDocument) {
+  offlineTimeoutStart();
   if (
     message.topic.startsWith(`/device/${device._id.toString()}/temperature`)
   ) {
@@ -528,7 +530,7 @@ function offlineTimeoutStart(clear = true) {
           feature: {},
         },
       });
-      offlineTimeoutStart(false);
+      offlineTimeoutStart();
     }, setOffineTimeoutTime);
   }
 }
