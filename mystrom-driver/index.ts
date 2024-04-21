@@ -72,6 +72,7 @@ let switchId: string | undefined;
 let switchValue: boolean | undefined;
 let deviceDisabled: boolean = false;
 let oldTemperatureValue: number = 0;
+let oldWsValue: number = 0;
 
 // default Interval 30s
 let requestInterval: number = 30000;
@@ -99,7 +100,7 @@ function getKeys(device: DeviceDocument) {
   switchId = findFeatureId(device.features, "switch");
 }
 
-function getInfo(device: DeviceDocument) {
+async function getInfo(device: DeviceDocument) {
   const ip = device.conf.ip;
 
   // Check and set requestInterval conf
@@ -128,109 +129,120 @@ function getInfo(device: DeviceDocument) {
     serverDominateDevice = tempServerDominateDevice !== "false";
   }
 
-  fetch(`http://${ip}/info`)
-    .then((response) => {
-      if (response.ok) {
-        return response.json();
-      } else {
-        console.log("Request failed");
-      }
-    })
-    .then((data) => {
-      parentPort?.postMessage({
-        type: "editDevice",
-        update: {
-          conf: {
-            ip: data.ip,
-            requestInterval: requestInterval,
-            serverDominateDevice: serverDominateDevice,
-          },
-          mac: data.mac,
+  try {
+    const response = await fetch(`http://${ip}/info`);
+    if (!response.ok) {
+      console.log("Request failed");
+      return;
+    }
+    const data = await response.json();
+
+    parentPort?.postMessage({
+      type: "editDevice",
+      update: {
+        conf: {
           ip: data.ip,
-          firmwareVersion: data.version,
-          deviceModel: data.name || data.type,
+          requestInterval: requestInterval,
+          serverDominateDevice: serverDominateDevice,
         },
-        preventRestart: true,
-      });
-    })
-    .catch((error) => {
-      parentPort?.postMessage({
-        type: "setData",
-        options: { status: "offline" },
-      });
+        mac: data.mac,
+        ip: data.ip,
+        firmwareVersion: data.version,
+        deviceModel: data.name || data.type,
+      },
+      preventRestart: true,
     });
+  } catch (error) {
+    parentPort?.postMessage({
+      type: "setData",
+      options: { status: "offline" },
+    });
+  }
 }
 
-function fetchData() {
-  if (deviceDisabled) {
+async function fetchData() {
+  if (deviceDisabled || !ip_addr) {
     return;
   }
-  fetch(`http://${ip_addr}/report`)
-    .then((response) => {
-      if (response.ok) {
-        return response.json();
-      } else {
-        console.log("Request failed");
-      }
-    })
-    .then((data) => {
-      // Access the "ws" and "temperature" keys in the returned JSON
-      const wsValue = data.Ws;
-      const temperatureValue = data.temperature;
-      const relayValue = data.relay;
-      // Check if delta is bigger that 0.6 due to mystrom messurement bug unstable by 0.6deg
-      const tempDelta = Math.abs(oldTemperatureValue - temperatureValue);
-      if (tempDelta > 0.6) {
-        oldTemperatureValue = temperatureValue;
-      }
-      // Check if Relay status is unequal to what it should be and if SDD is true
-      if (switchValue != relayValue && serverDominateDevice) {
-        sendRelay(ip_addr, switchValue);
-      } else {
-        switchValue = relayValue;
-      }
+  try {
+    const response = await fetch(`http://${ip_addr}/report`);
+    if (!response.ok) {
+      console.log("Request failed");
+      return;
+    }
+    const data = await response.json();
 
-      // Update the data accordingly
+    const wsValue = data.Ws;
+    const temperatureValue = data.temperature;
+    const relayValue = data.relay;
+
+    const wsDelta = Math.abs(oldWsValue - wsValue);
+    if (wsDelta > 1) {
+      oldWsValue = wsValue;
+    } else if (wsDelta != 0) {
       parentPort?.postMessage({
         type: "setData",
+        storeInDB: false,
         options: {
           feature: {
-            [temperatureId!]: oldTemperatureValue,
             [powerId!]: wsValue,
-            [switchId!]: switchValue,
           },
-          status: "online",
         },
       });
-    })
-    .catch((error) => {
-      parentPort?.postMessage({
-        type: "setData",
-        options: { status: "offline" },
-      });
+    }
+
+    // Check if delta is bigger that 0.6 due to mystrom messurement bug unstable by 0.6deg
+    const tempDelta = Math.abs(oldTemperatureValue - temperatureValue);
+    if (tempDelta > 0.6) {
+      oldTemperatureValue = temperatureValue;
+    }
+
+    if (switchValue != relayValue && serverDominateDevice) {
+      sendRelay(ip_addr, switchValue);
+    } else {
+      switchValue = relayValue;
+    }
+
+    parentPort?.postMessage({
+      type: "setData",
+      options: {
+        feature: {
+          [temperatureId!]: oldTemperatureValue,
+          ...(wsDelta > 1 ? { [powerId!]: oldWsValue } : {}),
+          [switchId!]: switchValue,
+        },
+        status: "online",
+      },
     });
+  } catch (error) {
+    parentPort?.postMessage({
+      type: "setData",
+      options: { status: "offline" },
+    });
+  }
 }
 
-function sendRelay(ip, state: boolean | undefined = switchValue) {
+async function sendRelay(ip: string, state: boolean | undefined = switchValue) {
   if (deviceDisabled) {
     return;
   }
-  fetch(`http://${ip}/relay?state=${state ? "1" : "0"}`)
-    .then((response) => {
-      if (!response.ok) {
-        parentPort?.postMessage({
-          type: "setData",
-          options: { status: "error" },
-        });
-      }
-    })
-    .catch((error) => {
-      console.log(error);
+  try {
+    const response = await fetch(
+      `http://${ip}/relay?state=${state ? "1" : "0"}`
+    );
+    if (!response.ok) {
       parentPort?.postMessage({
         type: "setData",
-        options: { status: "offline" },
+        options: { status: "error" },
       });
+    }
+  } catch (error) {
+    console.log(error);
+    parentPort?.postMessage({
+      type: "setData",
+      options: { status: "offline" },
     });
+  }
 }
 
 // ----------------------------------------------------------
@@ -282,7 +294,7 @@ if (!isMainThread) {
         ) {
           if (!switchId) return;
           const newSwitchValue = redisData.feature[switchId];
-          if (switchValue !== newSwitchValue && !deviceDisabled) {
+          if (switchValue !== newSwitchValue && !deviceDisabled && ip_addr) {
             // send new value to device
             switchValue = newSwitchValue;
             sendRelay(ip_addr, switchValue);

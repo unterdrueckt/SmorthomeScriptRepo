@@ -1,6 +1,6 @@
 {
   "name": "MyStrom",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "driver",
   "icon": "img:https://elabnet.de/wp-content/uploads/myStrom.png",
   "description": "MyStrom Switch driver."
