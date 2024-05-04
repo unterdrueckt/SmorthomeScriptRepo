@@ -212,6 +212,15 @@ function handleInitMessage(device: DeviceDocument, deviceValues: any): boolean {
 }
 
 function sendDeviceSettings() {
+  if (device.conf.ledConfig !== undefined) {
+    try {
+      parentPort?.postMessage({
+        type: "publishMessage",
+        topic: `/device/${device._id}/config/led`,
+        message: JSON.stringify(device.conf.ledConfig),
+      });
+    } catch {}
+  }
   // Check and set shutterMovementTime
   let shutterMovementTime = device.conf.shutterMovementTime;
   if (typeof shutterMovementTime === "string") {
@@ -393,7 +402,6 @@ function handleRegisteredDeviceMessage(message, device: DeviceDocument) {
  * @param device - The DeviceDocument representing the device.
  */
 function handleMqttMessage(message: any, device: DeviceDocument) {
-  offlineTimeoutStart();
   if (
     message.topic.startsWith(`/device/${device._id.toString()}/temperature`)
   ) {
@@ -421,6 +429,7 @@ function handleMqttMessage(message: any, device: DeviceDocument) {
         return;
       }
     }
+    offlineTimeoutStart();
     if (infoMessage && typeof infoMessage === "object") {
       parentPort?.postMessage({
         type: "editDevice",
@@ -444,6 +453,7 @@ function handleMqttMessage(message: any, device: DeviceDocument) {
   } else if (
     message.topic.startsWith(`/device/${device._id.toString()}/status`)
   ) {
+    offlineTimeoutStart();
     if (deviceStatus != message.message && message.message == "online") {
       sendDeviceSettings();
     }
@@ -469,7 +479,6 @@ function handleRedisMessage(message: any, device: DeviceDocument) {
   if (redisData.hasOwnProperty("feature")) {
     for (const [id, value] of Object.entries(redisData.feature) as any) {
       const feature = findEntryById(id);
-      const oldFeatureValue = feature?.value;
       if (feature) {
         if (feature.value !== parseFloat(value) && feature.command) {
           feature.value = parseFloat(value);
@@ -478,23 +487,6 @@ function handleRedisMessage(message: any, device: DeviceDocument) {
             topic: `/device/${device._id.toString()}/${feature.command}`,
             message: feature.value,
           });
-
-          // When shutterY is 0 (completely open) set tilt to 100 (completely open)
-          if (
-            findKeyById(id) == "shutterY" &&
-            feature.value != oldFeatureValue &&
-            feature.value == 0 &&
-            device_features["shutterTilt"].value != 100
-          ) {
-            parentPort?.postMessage({
-              type: "setData",
-              options: {
-                feature: {
-                  [device_features["shutterTilt"].id]: 100,
-                },
-              },
-            });
-          }
         }
       }
     }
@@ -569,8 +561,6 @@ if (!isMainThread) {
         break;
       default:
         break;
-    }
-    if (message.type === "init") {
     }
   });
 }
