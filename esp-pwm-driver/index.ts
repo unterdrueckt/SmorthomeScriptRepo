@@ -147,46 +147,101 @@ function handleInitMessage(device: DeviceDocument, deviceValues: any): boolean {
     for (const featureKey in deviceValues?.feature) {
       featureValue.set(featureKey, deviceValues?.feature?.[featureKey]);
     }
+    for (const feature of device.features) {
+      if (!featureValue.has(feature._id)) {
+        featureValue.set(feature._id, undefined);
+      }
+    }
     return false;
   }
 }
 
 function sendDeviceSettings() {
+  if (device.conf.ledConfig !== undefined) {
+    try {
+      parentPort?.postMessage({
+        type: "publishMessage",
+        topic: `/device/${device._id}/config/led`,
+        message: JSON.stringify(device.conf.ledConfig),
+      });
+    } catch {}
+  }
+  if (device.conf.brightness !== undefined) {
+    parentPort?.postMessage({
+      type: "publishMessage",
+      topic: `/device/${device._id}/config/neopixel`,
+      message: JSON.stringify({
+        brightness: device.conf.brightness.toString(),
+      }),
+    });
+  }
   for (const [key, value] of featureValue) {
     const feature = getFeatureByTypeOrNameOrId(device, key);
-    if (feature && feature?.category == "action" && feature?.types) {
-      const feature_numbers = extractNumberFromArray(feature?.types);
-      if (feature_numbers && feature_numbers[0]) {
-        const pwm_number = feature_numbers[0];
-        let pwm_value;
-        let fade_time = 0; // Default fade time is 0 ms
-        if (
-          typeof value === "boolean" ||
-          value === "true" ||
-          value === "false"
-        ) {
-          pwm_value = value === true || value === "true" ? 255 : 0; // Convert boolean or string 'true' or 'false' to 0 or 255
-        } else {
-          pwm_value = parseInt(value); // Convert string to integer
-
-          pwm_value = 2.5 * pwm_value;
-          if (isNaN(pwm_value)) {
-            console.error(
-              `Invalid value received for feature ${key}: ${value}`
-            );
-            continue; // Skip this feature if the value is not a valid number
-          }
-          fade_time = getPWMFadeTime(device, pwm_number);
-        }
+    if (!feature) continue;
+    const pin = feature.types
+      .find((type) => type.startsWith("pin:"))
+      ?.replace("pin:", "");
+    if (pin) {
+      if (feature.types.includes("state")) {
         parentPort?.postMessage({
           type: "publishMessage",
-          topic: `/device/${device._id}/pwm/${pwm_number}`,
-          message: JSON.stringify({
-            value: pwm_value,
-            fade: fade_time,
-          }),
+          topic: `/device/${device._id}/config/pin`,
+          message: JSON.stringify({ [pin]: "switch" }),
         });
       }
+      if (feature.types.includes("pwm")) {
+        parentPort?.postMessage({
+          type: "publishMessage",
+          topic: `/device/${device._id}/config/pin`,
+          message: JSON.stringify({ [pin]: "channel" }),
+        });
+      }
+    }
+    if (
+      feature?.category == "action" &&
+      feature?.types?.includes("color") &&
+      feature?.types?.some((type) => type.startsWith("neopixel:"))
+    ) {
+      const pixel = feature.types
+        .find((type) => type.startsWith("neopixel:"))
+        ?.replace("neopixel:", "");
+      if (pixel) {
+        parentPort?.postMessage({
+          type: "publishMessage",
+          topic: `/device/${device._id}/pixel/${pixel}`,
+          message: JSON.stringify({ ...hexToRgb(value) }),
+        });
+      } else {
+        parentPort?.postMessage({
+          type: "publishMessage",
+          topic: `/device/${device._id}/rgb`,
+          message: JSON.stringify({ ...hexToRgb(value), ...{ fade: 1000 } }),
+        });
+      }
+    }
+    if (feature?.category == "action" && feature?.types && pin) {
+      let pwm_value;
+      let fade_time = 0; // Default fade time is 0 ms
+      if (typeof value === "boolean" || value === "true" || value === "false") {
+        pwm_value = value === true || value === "true" ? 255 : 0; // Convert boolean or string 'true' or 'false' to 0 or 255
+      } else {
+        pwm_value = parseInt(value); // Convert string to integer
+
+        pwm_value = 2.5 * pwm_value;
+        if (isNaN(pwm_value)) {
+          console.error(`Invalid value received for feature ${key}: ${value}`);
+          continue; // Skip this feature if the value is not a valid number
+        }
+        fade_time = getPWMFadeTime(device, pin);
+      }
+      parentPort?.postMessage({
+        type: "publishMessage",
+        topic: `/device/${device._id}/pwm/${pin}`,
+        message: JSON.stringify({
+          value: pwm_value,
+          fade: fade_time,
+        }),
+      });
     }
   }
 
@@ -427,6 +482,26 @@ function handleMqttMessage(message: any, device: DeviceDocument) {
         });
       }
     }
+  } else if (message.topic.startsWith(`/device/${device._id}/switch`)) {
+    // Regular expression to match the number
+    const regex = /\/device\/\S+\/switch\/(\d+)/;
+    // Use match() to find the number
+    const match = message.topic.match(regex);
+    if (!match) return;
+    const pin = parseInt(match[1], 10);
+    const messageValue =
+      message.message == "true" || message.message === true ? true : false;
+    const feature_id = getFeatureByTypeOrNameOrId(device, `pin:${pin}`)?._id;
+    if (!feature_id) return;
+    featureValue.set(feature_id, messageValue);
+    parentPort?.postMessage({
+      type: "setData",
+      options: {
+        feature: {
+          [feature_id]: messageValue,
+        },
+      },
+    });
   } else if (message.topic.startsWith(`/device/${device._id}/info`)) {
     let infoMessage = message.message;
     if (typeof infoMessage === "string") {
@@ -485,48 +560,86 @@ function handleRedisMessage(message: any, device: DeviceDocument) {
   if (redisData.hasOwnProperty("feature")) {
     for (const [id, value] of Object.entries(redisData.feature) as any) {
       const feature = getFeatureByTypeOrNameOrId(device, id);
-      if (feature) {
-        const feature_types = feature.types;
-        if (feature_types) {
-          const feature_numbers = extractNumberFromArray(feature_types);
-          if (feature_numbers && feature_numbers[0]) {
-            const pwm_number = feature_numbers[0];
-            let pwm_value;
-            let fade_time = 0; // Default fade time is 0 ms
-            if (
-              typeof value === "boolean" ||
-              value === "true" ||
-              value === "false"
-            ) {
-              pwm_value = value === true || value === "true" ? 255 : 0; // Convert boolean or string 'true' or 'false' to 0 or 255
-            } else {
-              pwm_value = parseInt(value); // Convert string to integer
+      if (feature?.types?.includes("pwm")) {
+        const pin = feature.types
+          .find((type) => type.startsWith("pin:"))
+          ?.replace("pin:", "");
+        if (pin) {
+          let pwm_value;
+          let fade_time = 0; // Default fade time is 0 ms
+          if (
+            typeof value === "boolean" ||
+            value === "true" ||
+            value === "false"
+          ) {
+            pwm_value = value === true || value === "true" ? 255 : 0; // Convert boolean or string 'true' or 'false' to 0 or 255
+          } else {
+            pwm_value = parseInt(value); // Convert string to integer
 
-              pwm_value = 2.5 * pwm_value;
-              if (isNaN(pwm_value)) {
-                console.error(
-                  `Invalid value received for feature ${id}: ${value}`
-                );
-                continue; // Skip this feature if the value is not a valid number
-              }
-              fade_time = getPWMFadeTime(device, pwm_number);
+            pwm_value = 2.5 * pwm_value;
+            if (isNaN(pwm_value)) {
+              console.error(
+                `Invalid value received for feature ${id}: ${value}`
+              );
+              continue; // Skip this feature if the value is not a valid number
             }
-            parentPort?.postMessage({
-              type: "publishMessage",
-              topic: `/device/${device._id}/pwm/${pwm_number}`,
-              message: JSON.stringify({
-                value: pwm_value,
-                fade: fade_time,
-              }),
-            });
+            fade_time = getPWMFadeTime(device, pin);
           }
+          parentPort?.postMessage({
+            type: "publishMessage",
+            topic: `/device/${device._id}/pwm/${pin}`,
+            message: JSON.stringify({
+              value: pwm_value,
+              fade: fade_time,
+            }),
+          });
+        }
+      } else if (feature?.types?.includes("color")) {
+        const pixel = feature.types
+          .find((type) => type.startsWith("neopixel:"))
+          ?.replace("neopixel:", "");
+        if (pixel) {
+          parentPort?.postMessage({
+            type: "publishMessage",
+            topic: `/device/${device._id}/pixel/${pixel}`,
+            message: JSON.stringify({ ...hexToRgb(value) }),
+          });
+        } else {
+          parentPort?.postMessage({
+            type: "publishMessage",
+            topic: `/device/${device._id}/rgb`,
+            message: JSON.stringify({ ...hexToRgb(value), ...{ fade: 1000 } }),
+          });
         }
       }
     }
   }
 }
 
-function getPWMFadeTime(device: DeviceDocument, channelNumber: number): number {
+function hexToRgb(hex) {
+  // Remove any leading "#"
+  hex = hex.replace(/^#?/, "");
+
+  // Expand shorthand notation if necessary
+  if (hex.length === 3) {
+    hex = hex.replace(/(.)/g, "$1$1");
+  }
+
+  // Ensure a valid 6-character hex string
+  if (hex.length !== 6) {
+    throw new Error("Invalid hex color string");
+  }
+
+  // Convert pairs of hex digits to decimal values
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
+
+  // Create and return the RGB object
+  return { r, g, b };
+}
+
+function getPWMFadeTime(device: DeviceDocument, channelNumber: string): number {
   // Default fade time
   let defaultFadeTime = device?.conf?.fadetime ?? 500;
 
@@ -632,6 +745,11 @@ if (!isMainThread) {
         device = message.device;
         searching = handleInitMessage(device, message.values);
         offlineTimeoutStart();
+        parentPort?.postMessage({
+          type: "publishMessage",
+          topic: `/device/${device._id}/request`,
+          message: "status",
+        });
         break;
       case "mqtt":
         if (searching) {
