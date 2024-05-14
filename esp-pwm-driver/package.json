@@ -1,6 +1,6 @@
 {
   "name": "ESP PWM Controller",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "type": "driver",
   "icon": "mdi-square-wave",
   "description": "A generic driver for the esp pwm modules. Plug and play - Create an empty device using this driver and start the device."

@@ -166,14 +166,14 @@ function sendDeviceSettings() {
       });
     } catch {}
   }
-  if (device.conf.brightness !== undefined) {
-    parentPort?.postMessage({
-      type: "publishMessage",
-      topic: `/device/${device._id}/config/neopixel`,
-      message: JSON.stringify({
-        brightness: device.conf.brightness.toString(),
-      }),
-    });
+  if (device.conf.neopixelConfig !== undefined) {
+    try {
+      parentPort?.postMessage({
+        type: "publishMessage",
+        topic: `/device/${device._id}/config/neopixel`,
+        message: JSON.stringify(device.conf.neopixelConfig),
+      });
+    } catch {}
   }
   for (const [key, value] of featureValue) {
     const feature = getFeatureByTypeOrNameOrId(device, key);
@@ -197,10 +197,12 @@ function sendDeviceSettings() {
         });
       }
     }
+    if (feature?.category != "action") continue;
     if (
-      feature?.category == "action" &&
       feature?.types?.includes("color") &&
-      feature?.types?.some((type) => type.startsWith("neopixel:"))
+      feature?.types?.some(
+        (type) => type.startsWith("neopixel:") || type == "neopixel"
+      )
     ) {
       const pixel = feature.types
         .find((type) => type.startsWith("neopixel:"))
@@ -219,7 +221,7 @@ function sendDeviceSettings() {
         });
       }
     }
-    if (feature?.category == "action" && feature?.types && pin) {
+    if (feature?.types && pin) {
       let pwm_value;
       let fade_time = 0; // Default fade time is 0 ms
       if (typeof value === "boolean" || value === "true" || value === "false") {
@@ -240,6 +242,15 @@ function sendDeviceSettings() {
         message: JSON.stringify({
           value: pwm_value,
           fade: fade_time,
+        }),
+      });
+    }
+    if (feature?.types.includes("neopixel_brightness")) {
+      parentPort?.postMessage({
+        type: "publishMessage",
+        topic: `/device/${device._id}/config/neopixel`,
+        message: JSON.stringify({
+          brightness: value,
         }),
       });
     }
@@ -427,7 +438,7 @@ function handleMqttMessage(message: any, device: DeviceDocument) {
         featureValue.set(feature_id, temp);
         parentPort?.postMessage({
           type: "setData",
-          storeInDB: tempDelta > 0.45,
+          storeInDB: tempDelta > 0.1,
           options: {
             feature: {
               [feature_id]: temp,
@@ -473,7 +484,7 @@ function handleMqttMessage(message: any, device: DeviceDocument) {
         featureValue.set(feature_id, hum);
         parentPort?.postMessage({
           type: "setData",
-          storeInDB: humDelta > 0.65,
+          storeInDB: humDelta > 0.25,
           options: {
             feature: {
               [feature_id]: hum,
@@ -560,6 +571,7 @@ function handleRedisMessage(message: any, device: DeviceDocument) {
   if (redisData.hasOwnProperty("feature")) {
     for (const [id, value] of Object.entries(redisData.feature) as any) {
       const feature = getFeatureByTypeOrNameOrId(device, id);
+      if (feature?.category != "action") continue;
       if (feature?.types?.includes("pwm")) {
         const pin = feature.types
           .find((type) => type.startsWith("pin:"))
@@ -594,7 +606,12 @@ function handleRedisMessage(message: any, device: DeviceDocument) {
             }),
           });
         }
-      } else if (feature?.types?.includes("color")) {
+      } else if (
+        feature?.types?.includes("color") &&
+        feature?.types?.some(
+          (type) => type.startsWith("neopixel:") || type == "neopixel"
+        )
+      ) {
         const pixel = feature.types
           .find((type) => type.startsWith("neopixel:"))
           ?.replace("neopixel:", "");
@@ -611,6 +628,14 @@ function handleRedisMessage(message: any, device: DeviceDocument) {
             message: JSON.stringify({ ...hexToRgb(value), ...{ fade: 1000 } }),
           });
         }
+      } else if (feature?.types.includes("neopixel_brightness")) {
+        parentPort?.postMessage({
+          type: "publishMessage",
+          topic: `/device/${device._id}/config/neopixel`,
+          message: JSON.stringify({
+            brightness: value,
+          }),
+        });
       }
     }
   }
