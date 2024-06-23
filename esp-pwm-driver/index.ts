@@ -70,8 +70,8 @@ let searching = true;
 let deviceStatus = "";
 let device: DeviceDocument;
 const requestStatusTimeoutTime = 3 * 60 * 1000;
-const setOffineTimeoutTime = 5 * 60 * 1000;
-let setOffineTimeout: any; // NodeJS.Timeout
+const setOfflineTimeoutTime = 5 * 60 * 1000;
+let setOfflineTimeout: any; // NodeJS.Timeout
 let requestStatusTimeout: any; // NodeJS.Timeout
 let addFeatureProcess: Array<string> = [];
 let featureValue: Map<string, any> = new Map();
@@ -198,6 +198,29 @@ function sendDeviceSettings() {
       }
     }
     if (feature?.category != "action") continue;
+    if (feature?.types && pin) {
+      let pwm_value;
+      let fade_time = 0; // Default fade time is 0 ms
+      if (typeof value === "boolean" || value === "true" || value === "false") {
+        pwm_value = value === true || value === "true" ? 255 : 0; // Convert boolean or string 'true' or 'false' to 0 or 255
+      } else {
+        pwm_value = parseInt(value); // Convert string to integer
+
+        if (isNaN(pwm_value)) {
+          console.error(`Invalid value received for feature ${key}: ${value}`);
+          continue; // Skip this feature if the value is not a valid number
+        }
+        fade_time = getPWMFadeTime(device, pin);
+      }
+      parentPort?.postMessage({
+        type: "publishMessage",
+        topic: `/device/${device._id}/pwm/${pin}`,
+        message: JSON.stringify({
+          value: pwm_value,
+          fade: fade_time,
+        }),
+      });
+    }
     if (
       feature?.types?.includes("color") &&
       feature?.types?.some(
@@ -220,30 +243,6 @@ function sendDeviceSettings() {
           message: JSON.stringify({ ...hexToRgb(value), ...{ fade: 1000 } }),
         });
       }
-    }
-    if (feature?.types && pin) {
-      let pwm_value;
-      let fade_time = 0; // Default fade time is 0 ms
-      if (typeof value === "boolean" || value === "true" || value === "false") {
-        pwm_value = value === true || value === "true" ? 255 : 0; // Convert boolean or string 'true' or 'false' to 0 or 255
-      } else {
-        pwm_value = parseInt(value); // Convert string to integer
-
-        pwm_value = 2.5 * pwm_value;
-        if (isNaN(pwm_value)) {
-          console.error(`Invalid value received for feature ${key}: ${value}`);
-          continue; // Skip this feature if the value is not a valid number
-        }
-        fade_time = getPWMFadeTime(device, pin);
-      }
-      parentPort?.postMessage({
-        type: "publishMessage",
-        topic: `/device/${device._id}/pwm/${pin}`,
-        message: JSON.stringify({
-          value: pwm_value,
-          fade: fade_time,
-        }),
-      });
     }
     if (feature?.types.includes("neopixel_brightness")) {
       parentPort?.postMessage({
@@ -570,6 +569,10 @@ function handleRedisMessage(message: any, device: DeviceDocument) {
   const redisData = message.message;
   if (redisData.hasOwnProperty("feature")) {
     for (const [id, value] of Object.entries(redisData.feature) as any) {
+      const oldValue = featureValue.get(id);
+      // ? Return if no new value is received may be change in the future.
+      if (oldValue != undefined && oldValue === value) return;
+      featureValue.set(id, value);
       const feature = getFeatureByTypeOrNameOrId(device, id);
       if (feature?.category != "action") continue;
       if (feature?.types?.includes("pwm")) {
@@ -628,7 +631,8 @@ function handleRedisMessage(message: any, device: DeviceDocument) {
             message: JSON.stringify({ ...hexToRgb(value), ...{ fade: 1000 } }),
           });
         }
-      } else if (feature?.types.includes("neopixel_brightness")) {
+      }
+      if (feature?.types.includes("neopixel_brightness")) {
         parentPort?.postMessage({
           type: "publishMessage",
           topic: `/device/${device._id}/config/neopixel`,
@@ -715,11 +719,19 @@ function extractNumberFromArray(array) {
   return numbers;
 }
 
-// Helper function to request status if no update is received for a specified duration
-function offlineTimeoutStart(clear = true) {
+/**
+ * Starts a timeout to check the online status of a device.
+ * If no update is received within a specified duration, it sends a status request.
+ * The function initially waits for 3 minutes, then 2 minutes, then 1 minute.
+ * If still no update is received, it continues to send a status request every minute and sets the device to offline.
+ *
+ * @param {boolean} clear - A flag to indicate whether to clear existing timeouts. Defaults to true.
+ * @param {number} delay - The delay before the status request is sent. Defaults to 180000 milliseconds (3 minutes).
+ */
+function offlineTimeoutStart(clear = true, delay = 180000) {
   if (clear) {
-    clearTimeout(setOffineTimeout);
-    setOffineTimeout = undefined;
+    clearTimeout(setOfflineTimeout);
+    setOfflineTimeout = undefined;
     clearTimeout(requestStatusTimeout);
     requestStatusTimeout = undefined;
   }
@@ -731,12 +743,20 @@ function offlineTimeoutStart(clear = true) {
         topic: `/device/${device._id}/request`,
         message: "status",
       });
-      offlineTimeoutStart(false);
-    }, requestStatusTimeoutTime);
+      requestStatusTimeout = undefined;
+
+      if (delay === 180000) {
+        offlineTimeoutStart(false, 120000);
+      } else if (delay === 120000) {
+        offlineTimeoutStart(false, 60000);
+      } else {
+        offlineTimeoutStart(false, 60000);
+      }
+    }, delay);
   }
 
-  if (!setOffineTimeout) {
-    setOffineTimeout = setTimeout(() => {
+  if (!setOfflineTimeout && delay === 60000) {
+    setOfflineTimeout = setTimeout(() => {
       parentPort?.postMessage({
         type: "setData",
         options: {
@@ -744,8 +764,8 @@ function offlineTimeoutStart(clear = true) {
           feature: {},
         },
       });
-      offlineTimeoutStart();
-    }, setOffineTimeoutTime);
+      offlineTimeoutStart(true, 60000);
+    }, 65000);
   }
 }
 
