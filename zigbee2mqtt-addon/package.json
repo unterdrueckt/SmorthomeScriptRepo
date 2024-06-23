@@ -1,0 +1,7 @@
+{
+  "name": "zigbee2mqtt",
+  "version": "1.0.0",
+  "type": "addon",
+  "icon": "mdi-zigbee",
+  "description": "Zigbee2mqtt smart home addon to collect device data.",
+}

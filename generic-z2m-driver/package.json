@@ -1,0 +1,7 @@
+{
+  "name": "Generic ZigbeeMQTT Controller",
+  "version": "1.0.0",
+  "type": "driver",
+  "icon": "mdi-zigbee",
+  "description": "A generic driver for the zigbee2mqtt server system. (You need to connect the device using the Zigbee2MQTT web interface)"
+}
