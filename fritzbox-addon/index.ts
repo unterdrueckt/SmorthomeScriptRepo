@@ -1,6 +1,7 @@
+// addonconfig = { "url": "", "username": "", "password": "" }
 import crypto from "crypto";
 // Try to import from 'xml2js'
-import * as xml2js from '/app/node_modules/xml2js';
+import * as xml2js from "xml2js";
 
 import { parentPort, isMainThread, workerData } from "worker_threads";
 
